@@ -20,7 +20,7 @@ The single-cell RNA sequencing (scRNA-seq) raw count matrices used in this analy
    - Python code for this part of the analysis is available in the `python notebook` folder in this repository.
 
 4. **Survival Analysis (R):**
-   - Survival analysis related R code is available in the `survival` folder in this repository.
+   - Survival analysis related R code is available in the `seurat` folder in this repository.
 
 ## Usage
 - Refer to individual folders for specific scripts and data files.
