@@ -1,0 +1,290 @@
+rm(list = ls())
+library(Seurat)
+library(scran)
+library(scater)
+library(SCINA)
+library(patchwork)
+library(dplyr)
+library(magrittr)
+library(knitr)
+library(EnsDb.Hsapiens.v86)
+library(infercnv)
+library(SingleCellExperiment)
+library(ggplot2)
+library(cowplot)
+setwd("D:\\Academy\\thesis/code/")
+
+dir.create("../seurat/gradeIV",showWarnings = FALSE)
+dir.create("../seurat/gradeIV/figures",showWarnings = FALSE)
+dir.create("../seurat/gradeIV/results",showWarnings = FALSE)
+
+dir.create("../scMLnet",showWarnings = FALSE)
+dir.create("../scMLnet/gradeIV",showWarnings = FALSE)
+dir.create("../scMLnet/gradeIV/results",showWarnings = FALSE)
+
+#
+# Load the dataset
+load("../exprMatrix__GBM_2.RData")
+
+patient_id = read.table("../patient_id_data2.txt", header = FALSE)
+patient_name = read.table("../patient_name.txt", header = FALSE)
+
+sce <- SingleCellExperiment(list(counts=as.matrix(exprMatrix), logcounts = as.matrix(exprMatrix)), colData=DataFrame(patient.id=patient_id$V1,patient.name=patient_name$V1 ), metadata=list(study="IDH"))
+
+rm(exprMatrix)
+sce
+rowData(sce)$Symbol=(rownames(sce))
+
+dim(sce)
+
+temp1 <- mapIds(EnsDb.Hsapiens.v86,keys=rownames(sce), keytype="SYMBOL", column=c("SYMBOL","GENEID"))
+rowData(sce)$Ensembl <- as.vector(temp1)
+sce <- sce[which(!is.na(rowData(sce)$Ensembl)),]
+sce
+# ==========================================================================
+patient_grade_IV = c("MGH45" ,"MGH57")
+sce_IV <- sce[,which(colData(sce)$patient.name %in% patient_grade_IV)]
+table(colData(sce_IV)$patient.name)
+
+all.countsIV <- as.matrix(counts(sce_IV))
+cell_metadataIV = as.data.frame(colData(sce_IV))
+gbmIV <- CreateSeuratObject(counts = all.countsIV, meta.data = cell_metadataIV)
+
+
+gbmIV[["percent.mt"]] <- PercentageFeatureSet(gbmIV, pattern = "^MT-")
+gbmIV[["percent.ERCC"]] <- PercentageFeatureSet(gbmIV, pattern = "^ERCC")
+#------------------------
+pdf("../seurat/gradeIV/figures/violenplot.pdf")
+VlnPlot(gbmIV, features = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.ERCC"), ncol = 1, group.by = "patient.name")
+plot1 <- FeatureScatter(gbmIV, feature1 = "nCount_RNA", feature2 = "percent.ERCC")
+plot2 <- FeatureScatter(gbmIV, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+dev.off()
+#------------------------
+# Subset data:
+gbmIV <- subset(gbmIV, subset = nFeature_RNA > 200 & percent.ERCC < 50)
+gbmIV
+
+# Normalizing the data:
+gbmIV <- NormalizeData(gbmIV)
+gbmIV <- FindVariableFeatures(gbmIV, selection.method = "vst", nfeatures = 2000)
+
+# Identify the 10 most highly variable genes
+top10 <- head(VariableFeatures(gbmIV), 10)
+
+# plot variable features with and without labels
+plot1 <- VariableFeaturePlot(gbmIV)
+plot2 <- LabelPoints(plot = VariableFeaturePlot(gbmIV), points = top10, repel=TRUE, xnudge =0, ynudge =0)
+plot1 + plot2
+
+gbmIV <- ScaleData(gbmIV, features = rownames(gbmIV))
+
+gbmIV <- RunPCA(gbmIV, features = VariableFeatures(object = gbmIV), npcs = 20)
+pdf("../seurat/gradeIV/figures/pca.pdf")
+ElbowPlot(gbmIV)
+DimPlot(gbmIV, reduction = "pca", dims = c(1, 2), group.by = "patient.name")
+
+dev.off()
+
+# Cluster the cells
+library(harmony)
+gbmIV <- RunHarmony(gbmIV, "patient.name")
+pdf("../seurat/gradeIV/figures/harmony.pdf")
+DimPlot(gbmIV, reduction = "harmony", dims = c(1, 2), group.by = "patient.name")
+dev.off()
+
+gbmIV <- FindNeighbors(gbmIV, dims = 1:20, reduction = "harmony")
+gbmIV <- FindClusters(gbmIV, resolution = 0.5, method = "igraph", n.iter = 20)
+gbmIV <- FindClusters(gbmIV, resolution = 0.01, method = "igraph", n.iter = 20)
+gbmIV <- FindClusters(gbmIV, resolution = 0.009, method = "igraph", n.iter = 20)
+
+# -------------------------------------------------------------------------
+# iF want to consider different clustering:
+# Idents(gbmIV) = gbmIV@meta.data[["RNA_snn_res.0.05"]]
+# table(Idents(gbmIV))
+
+# Run non-linear dimensional reduction (UMAP/tSNE):
+gbmIV <- RunUMAP(gbmIV, reduction = "harmony", dims = 1:20)
+gbmIV <- RunTSNE(object = gbmIV, reduction = "harmony", dims = 1:20, perplexity = 30)
+saveRDS(gbmIV, file = "../seurat/gradeIV/results/gbmIV_part1.rds")
+table(gbmIV@meta.data[["RNA_snn_res.0.05"]])
+#-----------------------------------
+pdf("../seurat/gradeIV/figures/UMAP_tSNE.pdf")
+p1 = DimPlot(object = gbmIV, reduction = "umap")
+p2 = DimPlot(object = gbmIV, reduction = "umap", group.by = "patient.name")
+p3 = DimPlot(object = gbmIV, reduction = "umap", group.by = "RNA_snn_res.0.5")
+plot_grid(p1, p2, p3)
+
+p1 = DimPlot(object = gbmIV, reduction = "tsne")
+p2 = DimPlot(object = gbmIV, reduction = "tsne", group.by = "patient.name")
+p3 = DimPlot(object = gbmIV, reduction = "umap", group.by = "RNA_snn_res.0.5")
+plot_grid(p1, p2, p3)
+
+dev.off()
+
+#----------------------------------------------------------
+library(fossil)
+ari <- dplyr::select(gbmIV@meta.data, patient.name, RNA_snn_res.0.05)
+ari$patient.name <- plyr::mapvalues(ari$patient.name, from = c("MGH45" ,"MGH57"), to = c(0, 1))
+adj.rand.index(as.numeric(ari$patient.name), as.numeric(ari$RNA_snn_res.0.05))
+
+#----------------------------------------------------------
+mainmarkers <- c("PTPRC", "LAPTM5", "TYROBP", "CD14", "MBP", "MAG", "PLP1", "EGFR")
+for (i in seq_along(mainmarkers)) {
+  FeaturePlot(gbmIV, features = mainmarkers[i], coord.fixed = T, order = T, cols = viridis(10))
+  #ggsave2(paste0("FeaturePlot_mainmarkers_", mainmarkers[i], ".png"), path = "output/annotation", width = 10, height = 10, units = "cm")
+}
+
+
+DotPlot(gbmIV, features = mainmarkers, group.by = "RNA_snn_res.0.009") + 
+  coord_flip() + 
+  scale_color_viridis()
+#ggsave2("DotPlot_mainmarkers.png", path = "output/annotation", width = 30, height = 8, units = "cm")
+#----------------------------------------------------------
+
+
+# Finding deferentially expressed features (cluster biomarkers):
+gbmIV.markers <-  FindAllMarkers(gbmIV, only.pos = TRUE, min.pct = 0.1, logfc.threshold = 0.25,  test.use ="MAST")
+Marker_0 = gbmIV.markers[gbmIV.markers$cluster=="0",c(1,2,5,7)]
+Marker_1 = gbmIV.markers[gbmIV.markers$cluster=="1",c(1,2,5,7)]
+Marker_2 = gbmIV.markers[gbmIV.markers$cluster=="2",c(1,2,5,7)]
+# ----------------- Enrichment Analysis -------------------------
+library(clusterProfiler)
+library(enrichplot)
+library(ggplot2)
+organism = "org.Hs.eg.db"
+library(organism, character.only = TRUE)
+
+
+original_gene_list <- Marker_2$avg_log2FC
+names(original_gene_list) <- Marker_2$gene
+gene_list<-na.omit(original_gene_list)
+gene_list = sort(gene_list, decreasing = TRUE)
+
+gse <- gseGO(geneList=gene_list, 
+             ont ="ALL", 
+             keyType = "SYMBOL", 
+             pvalueCutoff = 0.05, 
+             OrgDb = organism, 
+             pAdjustMethod = "BH")
+
+dotplot(gse, showCategory=5, split=".sign", font.size=5) + facet_grid(.~.sign)
+
+# ----------------------------------------------------------------
+
+#  Heatmap:
+gbmIV.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC) -> top10
+
+#------------------------
+pdf("../seurat/gradeIV/figures/heatmap.pdf")
+DoHeatmap(gbmIV, features = top10$gene) + NoLegend()
+dev.off()
+# --------------------------------------------------
+pdf("../seurat/gradeIV/figures/feature_plot.pdf")
+
+# Immune cell
+FeaturePlot(gbmIV, features = c("PTPRC","LAPTM5","TYROBP","SRGN","FCER1G","CD74"))
+FeaturePlot(gbmIV, features = c("CD14","AIF1","FCER1G","FCGR3A","CSF1R","TYROBP"))
+FeaturePlot(gbmIV, features = c("CD2","CD3D","CD3E","CD3G"))
+
+# Cancer
+FeaturePlot(gbmIV, features = c("EGFR"))
+
+# Oligodendrocyte
+FeaturePlot(gbmIV, features = c("MBP","MOG","CLDN11","TF","PLP1","MAG"))
+
+dev.off()
+#--------------------------------------------------
+A = gbmIV@meta.data %>% mutate(cell_type_markers =
+                               case_when(RNA_snn_res.0.05 == 0 ~ "Cancer",
+                                         RNA_snn_res.0.05 == 1 ~ "Immune",
+                                         RNA_snn_res.0.05 == 2 ~ "Oligodendrocyte"))
+
+gbmIV@meta.data$cell_type_markers = A$cell_type_markers
+table(gbmIV@meta.data$cell_type_markers)
+
+pdf("../seurat/gradeIV/figures/cell_type_marker.pdf")
+DimPlot(gbmIV, reduction = "umap", group.by = "cell_type_markers")
+dev.off()
+
+saveRDS(gbmIV, "../seurat/gradeIV/results/gbmIV.rds" )
+write.csv(gbmIV.markers,"../seurat/gradeIV/results/gbmIV.markers" ,row.names = FALSE)
+write.csv(top10,paste0("../seurat/gradeIV/results/ten_markers.csv"))
+
+# ========================================================================
+# ========================================================================
+# ========================================================================
+# Network Construction Part :
+library(Seurat)
+library(Matrix)
+library(parallel)
+source('../../R_code/Run_scMLnet.R')
+
+data <- readRDS(file = "../seurat/gradeIV/results/gbmIV_part2.rds")
+GCMat <- data@assays[["RNA"]]@counts
+GCMat<- as(GCMat,"dgCMatrix")
+
+Barcode = rownames(data@meta.data)
+Cluster = data@meta.data$cell_type
+BarCluTable = data.frame(Barcode, Cluster)
+
+
+types <- unique(BarCluTable$Cluster)
+types
+table(BarCluTable$Cluster)
+
+pval <- 0.05
+logfc <- 0.15
+LigRecLib <- "../../scMLnet/LigRec.txt"
+TFTarLib <- "../../scMLnet/TFTargetGene.txt"
+RecTFLib <- "../../scMLnet/RecTF.txt"
+
+RecClu <- c("Cancer")
+LigClus <- c("Immune","Oligodendrocyte")
+netList <- list()
+for(ligClu in LigClus){
+  
+  #sender cell and receiver cell
+  LigClu <- ligClu 
+  RecClu <- RecClu
+  
+  name <- paste(strsplit(LigClu,split = "\\W")[[1]][1],RecClu,sep = "_")
+  
+  #main
+  netList[[name]] <- RunMLnet(GCMat, BarCluTable, RecClu, LigClu, 
+                              pval, logfc, 
+                              LigRecLib, TFTarLib, RecTFLib)
+  
+}
+
+for (name in names(netList)) {
+  #scMLnet output
+  MLnetList <- netList[[name]]
+  print(paste0(name,":"))
+  
+  #sender cell and receiver cell
+  LigClu <- strsplit(name,"_")[[1]][1]
+  RecClu <- strsplit(name,"_")[[1]][2]
+  
+  dir.create(paste0("../scMLnet/gradeIV/results/",LigClu,"_",RecClu), showWarnings = FALSE, recursive = TRUE, mode = "0777")
+  PyHome <- "C:/Users/USER/anaconda3/python.exe" 
+  
+  wd = paste0("../scMLnet/gradeIV/results/",LigClu,"_",RecClu)
+  
+  LigRecNet <- MLnetList[[1]]
+  RecTFNet <- MLnetList[[2]]
+  TFTarNet <- MLnetList[[3]]
+  
+  cat("Save Results\n")
+  NetLigRecFile <- paste(wd, "LigRec.net.txt", sep = "/")
+  NetRecTFFile <- paste(wd, "RecTF.net.txt", sep = "/")
+  NetTFTarFile <- paste(wd, "TFTarGene.net.txt", sep = "/")
+  writeLines(LigRecNet, con = NetLigRecFile, sep = "\n")
+  writeLines(RecTFNet, con = NetRecTFFile, sep = "\n")
+  writeLines(TFTarNet, con = NetTFTarFile, sep = "\n")
+  netPic <- paste(wd,paste0(LigClu,"_",RecClu,"_net.pdf"),sep = "/")
+  
+  cmd <- paste(PyHome, "../../R_code/DrawNetNewF.py", NetLigRecFile, NetRecTFFile, NetTFTarFile, netPic, sep = " ")
+  
+  system(cmd)
+}
