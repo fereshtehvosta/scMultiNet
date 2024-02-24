@@ -17,7 +17,7 @@ The single-cell RNA sequencing (scRNA-seq) raw count matrices used in this analy
 
 3. **Quadruple Extraction and Identification (Python):**
    - Quadruples were extracted and the most important quadruples were identified using machine learning models.
-   - Python code for this part of the analysis is available in the `python` folder in this repository.
+   - Python code for this part of the analysis is available in the `python notebook` folder in this repository.
 
 4. **Survival Analysis (R):**
    - Survival analysis related R code is available in the `survival` folder in this repository.
